@@ -29,7 +29,7 @@ public class Mesh2BPY
 		}
 
 		string scriptName = meshRenderer.name + ".py";
-		string scriptPath = Application.dataPath + "/" + scriptName;
+		string scriptPath = EditorUtility.SaveFilePanel("Export to Blender script", "", scriptName, "py");
 		
         using (StreamWriter w = new StreamWriter(scriptPath, false))
         {
