@@ -57,7 +57,7 @@ public class Mesh2BPY
    		return (SkinnedMeshRenderer) meshTransform.GetComponentInChildren(typeof(SkinnedMeshRenderer));
 	}
 	
-	private const string Version = "0.2";
+	private const string Version = "0.3";
 	private const string S = "    "; // indent space
 	
 	private string meshName;
@@ -111,8 +111,8 @@ public class Mesh2BPY
 		w.WriteLine("def buildMesh(origin, verts, faces_map, uv):");
 		w.WriteLine(S + "print('Building mesh')");
 		w.WriteLine(S + "# Create mesh and object");
-		w.WriteLine(S + "me = bpy.data.meshes.new('" + meshName + "_mesh_data')");
-		w.WriteLine(S + "ob = bpy.data.objects.new('" + meshName + "_mesh', me)");
+		w.WriteLine(S + "me = bpy.data.meshes.new('" + meshName + "_mesh')");
+		w.WriteLine(S + "ob = bpy.data.objects.new('" + meshName + "', me)");
 		w.WriteLine(S + "ob.location = origin");
 		w.WriteLine();
 		w.WriteLine(S + "# Link object to scene");
@@ -306,6 +306,8 @@ public class Mesh2BPY
 		w.WriteLine(S + "mod.object = rig");
 		w.WriteLine(S + "mod.use_bone_envelopes = False");
 		w.WriteLine(S + "mod.use_vertex_groups = True");
+		w.WriteLine();
+		w.WriteLine(S + "rig.parent = ob");
 		w.WriteLine();
 	}
 	
