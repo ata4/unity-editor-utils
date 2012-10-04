@@ -57,7 +57,7 @@ public class Mesh2BPY
    		return (SkinnedMeshRenderer) meshTransform.GetComponentInChildren(typeof(SkinnedMeshRenderer));
 	}
 	
-	private const string Version = "0.3";
+	private const string Version = "0.4";
 	private const string S = "    "; // indent space
 	
 	private string meshName;
@@ -108,12 +108,13 @@ public class Mesh2BPY
 	
 	public void WriteMeshBuilder()
 	{
-		w.WriteLine("def buildMesh(origin, verts, faces_map, uv):");
+		w.WriteLine("def buildMesh(verts, faces_map, uv):");
 		w.WriteLine(S + "print('Building mesh')");
 		w.WriteLine(S + "# Create mesh and object");
 		w.WriteLine(S + "me = bpy.data.meshes.new('" + meshName + "_mesh')");
 		w.WriteLine(S + "ob = bpy.data.objects.new('" + meshName + "', me)");
-		w.WriteLine(S + "ob.location = origin");
+		Vector3 pos = meshRenderer.transform.position;
+		w.WriteLine(S + "ob.location = (" + pos.x + "," + pos.z + "," + pos.y + ")");
 		w.WriteLine();
 		w.WriteLine(S + "# Link object to scene");
 		w.WriteLine(S + "scn = bpy.context.scene");
@@ -175,14 +176,15 @@ public class Mesh2BPY
 	
 	public void WriteSkeletonBuilder()
 	{
-		w.WriteLine("def buildArmature(origin):");
+		w.WriteLine("def buildArmature():");
 		w.WriteLine(S + "print('Building armature')");
 		w.WriteLine(S + "# Create armature and object");
 		w.WriteLine(S + "amt = bpy.data.armatures.new('" + meshName + "_armature')");
+		w.WriteLine(S + "amt.show_names = True");
+		w.WriteLine();
 		w.WriteLine(S + "rig = bpy.data.objects.new('" + meshName + "_rig', amt)");
-		w.WriteLine(S + "rig.location = origin");
 		w.WriteLine(S + "rig.show_x_ray = True");
-		//w.WriteLine(s + "amt.show_names = True");
+		w.WriteLine(S + "rig.draw_type = 'WIRE'");
 		w.WriteLine();
 		w.WriteLine(S + "# Link object to scene");
 		w.WriteLine(S + "scn = bpy.context.scene");
@@ -217,7 +219,10 @@ public class Mesh2BPY
 	}
 	
 	private Transform FindRootBone(Transform parent)
-	{
+	{	
+		if (parent == null)
+			return null;
+		
 		// find the root bone that usually isn't part of SkinnedMeshRenderer.bones
 		foreach (Transform child in parent)
 		{
@@ -244,8 +249,17 @@ public class Mesh2BPY
 		
 		if (tail.childCount == 0)
 		{
+			Vector3 dir;
+			
+			// FIXME: in Wild Skies, transforms starting with "hp_" seem to have
+			// incorrect rotations, use the direction of the previous bone instead
+			// as a workaround
+			if (tail.name.StartsWith("hp_", true, null))
+				dir = (tail.position - head.position).normalized * 0.1f;
+			else
+				dir = tail.rotation * new Vector3(-1, 0, 0) * 0.2f;
+
 			// write the tail as terminating bone with a fixed length
-			Vector3 dir = tail.localRotation * Vector3.forward * 0.2f;
 			WriteBone(tail, head, dir);
 		}
 		else
@@ -262,7 +276,6 @@ public class Mesh2BPY
 	{
 		Vector3 hp = bone.position;
 		Vector3 tp = bone.position + dir;
-
 		WriteBoneRaw(bone.name, parent != null ? parent.name : null, hp, tp);
 	}
 	
@@ -270,8 +283,8 @@ public class Mesh2BPY
 	{
 		string vname = FixBoneName(name);
 		w.WriteLine(S + vname + " = amt.edit_bones.new('" + name + "')");
-		w.WriteLine(S + vname + ".head = (" + hp.x + "," + -hp.z + "," + hp.y + ")");
-		w.WriteLine(S + vname + ".tail = (" + tp.x + "," + -tp.z + "," + tp.y + ")");
+		w.WriteLine(S + vname + ".head = (" + hp.x + "," + hp.z + "," + hp.y + ")");
+		w.WriteLine(S + vname + ".tail = (" + tp.x + "," + tp.z + "," + tp.y + ")");
 		
 		if (parentName != null)
 		{
@@ -307,13 +320,13 @@ public class Mesh2BPY
 		w.WriteLine(S + "mod.use_bone_envelopes = False");
 		w.WriteLine(S + "mod.use_vertex_groups = True");
 		w.WriteLine();
-		w.WriteLine(S + "rig.parent = ob");
+		w.WriteLine(S + "ob.parent = rig");
 		w.WriteLine();
 	}
 	
 	public void WriteModelBuilder() 
 	{
-		w.WriteLine("def build(origin):");
+		w.WriteLine("def build():");
 		w.WriteLine(S + "print('Building model " + meshName + "')");
 		w.WriteLine(S + "# List of vertex coordinates");
 		w.WriteLine(S + "verts = [");
@@ -326,7 +339,7 @@ public class Mesh2BPY
 			
 	    	//This is sort of ugly - inverting x-component since we're in
 	    	//a different coordinate system than "everyone" is "used to".
-			w.Write("(" + vert.x + "," + -vert.z + "," + vert.y + "),");
+			w.Write("(" + vert.x + "," + vert.z + "," + vert.y + "),");
 			
 			// new line after 3 verts
 			if ((i + 1) % 3 == 0)
@@ -347,7 +360,12 @@ public class Mesh2BPY
 		{
 			Material material = mats[i];
 			
-			w.WriteLine(S + "faces['" + material.name + "'] = [");
+			if (material == null)
+				w.WriteLine(S + "faces['null'] = [");
+			else
+				w.WriteLine(S + "faces['" + material.name + "'] = [");
+			
+			
 			w.Write(S + S);
 			
 			int[] triangles = mesh.GetTriangles(i);
@@ -444,8 +462,8 @@ public class Mesh2BPY
 		
 		w.WriteLine();
 		
-		w.WriteLine(S + "ob = buildMesh(origin, verts, faces, uv)");
-		w.WriteLine(S + "rig = buildArmature(origin)");
+		w.WriteLine(S + "ob = buildMesh(verts, faces, uv)");
+		w.WriteLine(S + "rig = buildArmature()");
 		w.WriteLine(S + "buildSkin(ob, rig, vgroups)");
 		w.WriteLine();
 	}
@@ -453,7 +471,7 @@ public class Mesh2BPY
 	public void WriteFooter()
 	{
 		w.WriteLine("if __name__ == \"__main__\":");
-		w.WriteLine(S + "build((0,0,0))");
+		w.WriteLine(S + "build()");
 	}
 }
 
