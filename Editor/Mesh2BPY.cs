@@ -17,22 +17,22 @@ using UnityEditor;
 
 public class Mesh2BPY
 {
-    [MenuItem("Custom/Export/Skinned mesh to Blender script")]
-    public static void ExportMesh()
-    {
+	[MenuItem("Custom/Export/Skinned mesh to Blender script")]
+	public static void ExportMesh()
+	{
    		SkinnedMeshRenderer meshRenderer = GetSelectedMesh();
 		
 		if (meshRenderer == null)
 		{
 			EditorUtility.DisplayDialog("Error", "Please select a skinned mesh renderer you wish to export.", "Ok");
-            return;
+			return;
 		}
 
 		string scriptName = meshRenderer.name + ".py";
 		string scriptPath = EditorUtility.SaveFilePanel("Export to Blender script", "", scriptName, "py");
 		
-        using (StreamWriter w = new StreamWriter(scriptPath, false))
-        {
+		using (StreamWriter w = new StreamWriter(scriptPath, false))
+		{
 			Mesh2BPY m2bpy = new Mesh2BPY(meshRenderer, w);
 			m2bpy.WriteHeader();
 			m2bpy.WriteMeshBuilder();
@@ -49,8 +49,8 @@ public class Mesh2BPY
 	{
 		Transform[] selection = Selection.GetTransforms(SelectionMode.Unfiltered);
 		
-        if (selection.Length == 0)
-            return null;
+		if (selection.Length == 0)
+			return null;
 		
 		Transform meshTransform = selection[0];
 		
@@ -336,13 +336,13 @@ public class Mesh2BPY
 		w.WriteLine(S + "verts = [");
 		w.Write(S + S);
 		
-	    for (int i = 0; i < verts.Length; i++)
-	    {
+		for (int i = 0; i < verts.Length; i++)
+		{
 			//Vector3 vert = meshRenderer.transform.TransformPoint(verts[i]);
 			Vector3 vert = verts[i];
 			
-	    	//This is sort of ugly - inverting x-component since we're in
-	    	//a different coordinate system than "everyone" is "used to".
+			//This is sort of ugly - inverting x-component since we're in
+			//a different coordinate system than "everyone" is "used to".
 			w.Write("(" + -vert.x + "," + -vert.z + "," + vert.y + "),");
 			
 			WriteAutoLineBreak(i + 1);
@@ -365,8 +365,8 @@ public class Mesh2BPY
 			
 			int[] triangles = mesh.GetTriangles(i);
 			
-		    for (int j = 0, n = 1; j < triangles.Length; j += 3, n++) 
-		    {
+			for (int j = 0, n = 1; j < triangles.Length; j += 3, n++) 
+			{
 				w.Write("(" + triangles[j] + "," + triangles[j + 1] + "," + triangles[j + 2] + ",0),");
 
 				WriteAutoLineBreak(n);
@@ -401,8 +401,8 @@ public class Mesh2BPY
 		w.WriteLine(S + "# List of vertex groups, in the form (vertex, weight)");
 		w.WriteLine(S + "vg = collections.OrderedDict()");
 		
-	    for (int i = 0; i < bones.Length; i++)
-	    {
+		for (int i = 0; i < bones.Length; i++)
+		{
 			List<Dictionary<int, float>> vweightList = new List<Dictionary<int, float>>();
 			
 			for (int j = 0; j < boneWeights.Length; j++)
