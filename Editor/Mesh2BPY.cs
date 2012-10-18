@@ -57,7 +57,8 @@ public class Mesh2BPY
    		return (SkinnedMeshRenderer) meshTransform.GetComponentInChildren(typeof(SkinnedMeshRenderer));
 	}
 	
-	private const string Version = "0.4";
+	private const string Version = "0.5";
+	private const int LineBreakLimit = 256;
 	private const string S = "    "; // indent space
 	
 	private string meshName;
@@ -114,7 +115,7 @@ public class Mesh2BPY
 		w.WriteLine(S + "me = bpy.data.meshes.new('" + meshName + "_mesh')");
 		w.WriteLine(S + "ob = bpy.data.objects.new('" + meshName + "', me)");
 		Vector3 pos = meshRenderer.transform.position;
-		w.WriteLine(S + "ob.location = (" + pos.x + "," + pos.z + "," + pos.y + ")");
+		w.WriteLine(S + "ob.location = (" + -pos.x + "," + -pos.z + "," + pos.y + ")");
 		w.WriteLine();
 		w.WriteLine(S + "# Link object to scene");
 		w.WriteLine(S + "scn = bpy.context.scene");
@@ -128,17 +129,21 @@ public class Mesh2BPY
 		w.WriteLine();
 		w.WriteLine(S + "# Create materials and collect face indices");
 		w.WriteLine(S + "faces_all = []");
-		w.WriteLine(S + "images = []");
-		w.WriteLine(S + "for name, faces in faces_map.items():");
-		w.WriteLine(S + S + "image = load_image(name + '_diffuse.jpg', './', place_holder=True)");
-		w.WriteLine(S + S + "images.append(image)");
-		w.WriteLine(S + S + "texture = bpy.data.textures.new(name=name + '_diffuse',type='IMAGE')");
-		w.WriteLine(S + S + "texture.image = image");
-		w.WriteLine(S + S + "material = bpy.data.materials.new(name)");
-		w.WriteLine(S + S + "slot = material.texture_slots.add()");
-		w.WriteLine(S + S + "slot.texture = texture");
-		w.WriteLine(S + S + "slot.texture_coords = 'UV'");
-		w.WriteLine(S + S + "slot.use_map_color_diffuse = True");
+		w.WriteLine(S + "for name, faces in faces_map.items():");		
+		w.WriteLine(S + S + "material = bpy.data.materials.get(name)");
+		w.WriteLine(S + S + "tex_name = name + '_diffuse'");
+		w.WriteLine(S + S + "tex_file = tex_name + '.jpg'");
+		w.WriteLine(S + S + "if material == None:");
+		w.WriteLine(S + S + S + "material = bpy.data.materials.new(name)");
+		w.WriteLine(S + S + S + "image = load_image(tex_file, './textures/', place_holder=True)");
+		w.WriteLine(S + S + S + "texture = bpy.data.textures.new(tex_name, 'IMAGE')");
+		w.WriteLine(S + S + S + "texture.image = image");
+		w.WriteLine(S + S + S + "slot = material.texture_slots.add()");
+		w.WriteLine(S + S + S + "slot.texture = texture");
+		w.WriteLine(S + S + S + "slot.texture_coords = 'UV'");
+		w.WriteLine(S + S + S + "slot.uv_layer = '" + meshName + "_uv'");
+		w.WriteLine(S + S + S + "slot.use_map_color_diffuse = True");
+		w.WriteLine();
 		w.WriteLine(S + S + "me.materials.append(material)");
 		w.WriteLine(S + S + "faces_all += faces");
 		w.WriteLine();
@@ -146,6 +151,14 @@ public class Mesh2BPY
 		w.WriteLine(S + "me.tessfaces.add(len(faces_all))");
 		w.WriteLine(S + "me.tessfaces.foreach_set(\"vertices_raw\", unpack_list(faces_all))");
 		w.WriteLine(S + "me.tessfaces.foreach_set(\"use_smooth\", [True] * len(me.tessfaces))");
+		w.WriteLine();
+		w.WriteLine(S + "# Load UV");
+		w.WriteLine(S + "uvtex = me.tessface_uv_textures.new('" + meshName + "_uv')");
+		w.WriteLine(S + "for n, tf in enumerate(uv):");
+		w.WriteLine(S + S + "texdata = uvtex.data[n]");
+		w.WriteLine(S + S + "texdata.uv1 = tf[0]");
+		w.WriteLine(S + S + "texdata.uv2 = tf[1]");
+		w.WriteLine(S + S + "texdata.uv3 = tf[2]");
 		w.WriteLine();
 		w.WriteLine(S + "# Set face materials according to the mapping");
 		w.WriteLine(S + "mat_index = 0");
@@ -155,17 +168,6 @@ public class Mesh2BPY
 		w.WriteLine(S + S + S + "me.tessfaces[i + face_index].material_index = mat_index");
 		w.WriteLine(S + S + "mat_index += 1");
 		w.WriteLine(S + S + "face_index += len(faces)");
-		
-		w.WriteLine();
-		w.WriteLine(S + "# Load UV");
-		w.WriteLine(S + "uvtex = me.tessface_uv_textures.new('" + meshName + "_uv')");
-		w.WriteLine(S + "for n, tf in enumerate(uv):");
-		w.WriteLine(S + S + "texdata = uvtex.data[n]");
-		w.WriteLine(S + S + "texdata.uv1 = tf[0]");
-		w.WriteLine(S + S + "texdata.uv2 = tf[1]");
-		w.WriteLine(S + S + "texdata.uv3 = tf[2]");
-		w.WriteLine(S + S + "texdata.image = images[0]");
-		
 		w.WriteLine();
 		w.WriteLine(S + "# Update mesh with new data");
 		w.WriteLine(S + "me.update(calc_edges=True)");
@@ -250,11 +252,13 @@ public class Mesh2BPY
 		if (tail.childCount == 0)
 		{
 			Vector3 dir;
+			float dist = Math.Abs((tail.position - head.position).magnitude);
 			
-			// FIXME: in Wild Skies, transforms starting with "hp_" seem to have
+			// check the distance so the head isn't at the same location as the tail
+			// FIXME: in Wild Skies, transforms starting with "hp" seem to have
 			// incorrect rotations, use the direction of the previous bone instead
 			// as a workaround
-			if (tail.name.StartsWith("hp_", true, null))
+			if (dist > 0.1f && tail.name.StartsWith("hp", true, null))
 				dir = (tail.position - head.position).normalized * 0.1f;
 			else
 				dir = tail.rotation * new Vector3(-1, 0, 0) * 0.2f;
@@ -283,8 +287,8 @@ public class Mesh2BPY
 	{
 		string vname = FixBoneName(name);
 		w.WriteLine(S + vname + " = amt.edit_bones.new('" + name + "')");
-		w.WriteLine(S + vname + ".head = (" + hp.x + "," + hp.z + "," + hp.y + ")");
-		w.WriteLine(S + vname + ".tail = (" + tp.x + "," + tp.z + "," + tp.y + ")");
+		w.WriteLine(S + vname + ".head = (" + -hp.x + "," + -hp.z + "," + hp.y + ")");
+		w.WriteLine(S + vname + ".tail = (" + -tp.x + "," + -tp.z + "," + tp.y + ")");
 		
 		if (parentName != null)
 		{
@@ -339,14 +343,9 @@ public class Mesh2BPY
 			
 	    	//This is sort of ugly - inverting x-component since we're in
 	    	//a different coordinate system than "everyone" is "used to".
-			w.Write("(" + vert.x + "," + vert.z + "," + vert.y + "),");
+			w.Write("(" + -vert.x + "," + -vert.z + "," + vert.y + "),");
 			
-			// new line after 3 verts
-			if ((i + 1) % 3 == 0)
-			{
-				w.WriteLine();
-				w.Write(S + S);
-			}
+			WriteAutoLineBreak(i + 1);
 		}
 		
 		w.WriteLine();
@@ -359,13 +358,9 @@ public class Mesh2BPY
 		for (int i = 0; i < mesh.subMeshCount; i++)
 		{
 			Material material = mats[i];
+			String matName = material == null ? "null" : material.name;
 			
-			if (material == null)
-				w.WriteLine(S + "faces['null'] = [");
-			else
-				w.WriteLine(S + "faces['" + material.name + "'] = [");
-			
-			
+			w.WriteLine(S + "faces['" + matName + "'] = [");
 			w.Write(S + S);
 			
 			int[] triangles = mesh.GetTriangles(i);
@@ -373,13 +368,8 @@ public class Mesh2BPY
 		    for (int j = 0, n = 1; j < triangles.Length; j += 3, n++) 
 		    {
 				w.Write("(" + triangles[j] + "," + triangles[j + 1] + "," + triangles[j + 2] + ",0),");
-		
-				// new line after 6 tris
-				if (n % 6 == 0)
-				{
-					w.WriteLine();
-					w.Write(S + S);
-				}
+
+				WriteAutoLineBreak(n);
 			}
 			
 			w.WriteLine();
@@ -387,24 +377,29 @@ public class Mesh2BPY
 			w.WriteLine();
 		}
 		
+		w.WriteLine();
+		
 		w.WriteLine(S + "# List of texture face UVs");
 		w.WriteLine(S + "uv = [");
+		w.Write(S + S);
 		
-		for (int i = 0; i < tris.Length; i += 3) 
+		for (int i = 0, n = 1; i < tris.Length; i += 3, n++) 
 		{
-			w.Write(S + S + "[");
+			w.Write("[");
 			w.Write("(" + uvs[tris[i]].x + "," + uvs[tris[i]].y + "),");
 			w.Write("(" + uvs[tris[i + 1]].x + "," + uvs[tris[i + 1]].y + "),");
 			w.Write("(" + uvs[tris[i + 2]].x + "," + uvs[tris[i + 2]].y + ")");
 			w.Write("],");
-			w.WriteLine();
+			
+			WriteAutoLineBreak(n);
 		}
 		
+		w.WriteLine();
 		w.WriteLine(S + "]");
 		w.WriteLine();
 		
 		w.WriteLine(S + "# List of vertex groups, in the form (vertex, weight)");
-		w.WriteLine(S + "vgroups = collections.OrderedDict()");
+		w.WriteLine(S + "vg = collections.OrderedDict()");
 		
 	    for (int i = 0; i < bones.Length; i++)
 	    {
@@ -432,27 +427,13 @@ public class Mesh2BPY
 			
 			if (vweightList.Count > 0)
 			{
-				w.WriteLine(S + "vgroups['" + bones[i].name + "'] = [");
-				w.Write(S + S);
+				w.Write(S + "vg['" + bones[i].name + "'] = [");
 				
-				int n = 0;
 				foreach (Dictionary<int, float> vweight in vweightList)
-				{
 					foreach(KeyValuePair<int, float> entry in vweight)
-					{
 						w.Write("(" + entry.Key + "," + entry.Value + "),");
-					}
-					
-					// new line after 10 pairs
-					if (++n % 10 == 0)
-					{
-						w.WriteLine();
-						w.Write(S + S);
-					}
-				}
 				
-				w.WriteLine();
-				w.WriteLine(S + "]");
+				w.WriteLine("]");
 			}
 			else
 			{
@@ -464,7 +445,7 @@ public class Mesh2BPY
 		
 		w.WriteLine(S + "ob = buildMesh(verts, faces, uv)");
 		w.WriteLine(S + "rig = buildArmature()");
-		w.WriteLine(S + "buildSkin(ob, rig, vgroups)");
+		w.WriteLine(S + "buildSkin(ob, rig, vg)");
 		w.WriteLine();
 	}
 	
@@ -472,6 +453,15 @@ public class Mesh2BPY
 	{
 		w.WriteLine("if __name__ == \"__main__\":");
 		w.WriteLine(S + "build()");
+	}
+	
+	private void WriteAutoLineBreak(int n)
+	{
+		if (n % LineBreakLimit == 0)
+		{
+			w.WriteLine();
+			w.Write(S + S);
+		}
 	}
 }
 
