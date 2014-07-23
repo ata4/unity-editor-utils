@@ -17,17 +17,26 @@ using UnityEditor;
 
 public class Mesh2BPY {
 	
-	[MenuItem("Custom/Export/Skinned mesh to Blender script")]
+	[MenuItem("Custom/Export Mesh to Python")]
 	public static void ExportMesh() {
-   		SkinnedMeshRenderer meshRenderer = GetSelectedMesh();
+		Transform[] selection = Selection.GetTransforms(SelectionMode.Unfiltered);
 		
-		if (meshRenderer == null) {
-			EditorUtility.DisplayDialog("Error", "Please select a skinned mesh renderer you wish to export.", "Ok");
+		if (selection.Length == 0) {
+			EditorUtility.DisplayDialog(WindowTitle, "Please select a transform that contains a SkinnedMeshRenderer you wish to export.", "Ok");
+			return;
+		}
+		
+		Transform root = selection[0];
+   		SkinnedMeshRenderer mesh = (SkinnedMeshRenderer) root.GetComponentInChildren(typeof(SkinnedMeshRenderer));
+		//Animation anim = (Animation) root.GetComponent(typeof(Animation));
+
+		if (mesh == null) {
+			EditorUtility.DisplayDialog(WindowTitle, "No SkinnedMeshRenderer found in the currently selected transform!", "Ok");
 			return;
 		}
 
-		string scriptName = meshRenderer.name + ".py";
-		string scriptPath = EditorUtility.SaveFilePanel("Export to Blender script", "", scriptName, "py");
+		string scriptName = mesh.name + ".py";
+		string scriptPath = EditorUtility.SaveFilePanel("Export to Python script", "", scriptName, "py");
 		
 		if (scriptPath.Length == 0) {
 			return;
@@ -36,448 +45,205 @@ public class Mesh2BPY {
 		StreamWriter w = new StreamWriter(scriptPath, false);
 			
 		using (w) {
-			Mesh2BPY m2bpy = new Mesh2BPY(meshRenderer, w);
+			Mesh2BPY m2bpy = new Mesh2BPY(mesh, w);
 			m2bpy.WriteHeader();
-			m2bpy.WriteMeshBuilder();
-			m2bpy.WriteSkeletonBuilder();
-			m2bpy.WriteSkinBuilder();
-			m2bpy.WriteModelBuilder();
-			m2bpy.WriteFooter();
+			m2bpy.WriteGeometry();
+			m2bpy.WriteTransforms();
+			//m2bpy.WriteAnimations(anim);
 		}
 		
-		EditorUtility.DisplayDialog("Mesh2BPY", "Finished writing " + scriptName, "Ok");
+		EditorUtility.DisplayDialog(WindowTitle, "Finished writing " + scriptName, "Ok");
 	}
 	
-	public static SkinnedMeshRenderer GetSelectedMesh() {
-		Transform[] selection = Selection.GetTransforms(SelectionMode.Unfiltered);
-		
-		if (selection.Length == 0) {
-			return null;
-		}
-		
-		Transform meshTransform = selection[0];
-		
-   		return (SkinnedMeshRenderer) meshTransform.GetComponentInChildren(typeof(SkinnedMeshRenderer));
-	}
-	
-	private const string Version = "0.6";
-	private const int LineBreakLimit = 256;
+	private const string Version = "0.7";
+	private const string WindowTitle = "Mesh2BPY";
 	private const string S = "    "; // indent space
-	
-	private string modelName;
+		
 	private string scriptName;
 	private string scriptPath;
 	private StreamWriter w;
+
+	private Dictionary<Transform, Vector3> boneScales = new Dictionary<Transform, Vector3>();
 	
 	private SkinnedMeshRenderer meshRenderer;
 	private Mesh mesh;
-	private Vector3[] verts;
-	private int[] tris;
-	private Vector2[] uvs;
-	private Material[] mats;
-	private Transform[] bones;
-	private Transform rootBone;
-	private BoneWeight[] boneWeights;
-	private HashSet<Transform> registeredBones;
-	private HashSet<Transform> visibleBones;
-	private HashSet<Transform> looseBones;
 	
 	public Mesh2BPY(SkinnedMeshRenderer mr, StreamWriter sw) {
 		meshRenderer = mr;
-		mesh = meshRenderer.sharedMesh;
-		verts = mesh.vertices;
-		tris = mesh.triangles;
-		uvs = mesh.uv;
-		mats = meshRenderer.sharedMaterials;
-		bones = meshRenderer.bones;
-		boneWeights = mesh.boneWeights;
-		modelName = meshRenderer.name;
+		mesh = mr.sharedMesh;
 		w = sw;
 	}
 	
+	private string ValueString(string str) {
+		return "'" + str + "'";
+	}
+	
+	private string ValueVector2(UnityEngine.Vector2 vec) {
+		return ValueVector2(vec.x, vec.y);
+	}
+	
+	private string ValueVector2(float x, float y) {
+		return "(" + x + ", " + y + ")";
+	}
+	
+	private string ValueVector3(UnityEngine.Vector3 vec) {
+		return ValueVector3(vec.x, vec.y, vec.z);
+	}
+	
+	private string ValueVector3(float x, float y, float z) {
+		return "(" + x + ", " + y + ", " + z + ")";
+	}
+	
+	private string ValueQuaternion(UnityEngine.Quaternion q) {
+		return ValueVector4(q.x, q.y, q.z, q.w);
+	}
+	
+	private string ValueVector4(float x, float y, float z, float w) {
+		return "(" + x + ", " + y + ", " + z + ", " + w + ")";
+	}
+	
 	public void WriteHeader() {
-		w.WriteLine("# Blender model build script for \"" + modelName + "\"");
+		w.WriteLine("# Raw model data Python script for \"" + meshRenderer.name + "\"");
 		w.WriteLine("# Written by Mesh2BPY " + Version);
-		w.WriteLine("# Verts:      " + verts.Length);
-		w.WriteLine("# Tris:       " + tris.Length);
-		w.WriteLine("# Bones:      " + bones.Length);
-		w.WriteLine("# Materials:  " + mats.Length);
-		w.WriteLine("# Sub meshes: " + mesh.subMeshCount);
-		w.WriteLine();
-		w.WriteLine("import bpy, mathutils, collections");
-		w.WriteLine("from bpy_extras.io_utils import unpack_list, unpack_face_list");
-		w.WriteLine("from bpy_extras.image_utils import load_image");
-		w.WriteLine();
-		w.WriteLine("model_name = '" + modelName + "'");
 		w.WriteLine();
 	}
 	
-	public void WriteMeshBuilder() {
-		w.WriteLine("def buildMesh(verts, faces_map, uv):");
-		w.WriteLine(S + "print('Building mesh')");
-		
-		Vector3 pos = meshRenderer.transform.position;
-		Vector3 rot = meshRenderer.transform.eulerAngles;
-		w.WriteLine(S + "# Create mesh and object");
-		w.WriteLine(S + "me = bpy.data.meshes.new(model_name + '_mesh')");
-		w.WriteLine(S + "ob = bpy.data.objects.new(model_name + '_mesh', me)");
-		w.WriteLine(S + "ob.location = (" + -pos.x + "," + -pos.z + "," + pos.y + ")");
-		w.WriteLine(S + "ob.rotation_euler = (" + rot.x * Mathf.Deg2Rad + "," + rot.y * Mathf.Deg2Rad + "," + rot.z * Mathf.Deg2Rad + ")");
-		w.WriteLine();
-		
-		w.WriteLine(S + "# Link object to scene");
-		w.WriteLine(S + "scn = bpy.context.scene");
-		w.WriteLine(S + "scn.objects.link(ob)");
-		w.WriteLine(S + "scn.objects.active = ob");
-		w.WriteLine(S + "scn.update()");
-		w.WriteLine();
-		
-		w.WriteLine(S + "# Load raw vertices");
-		w.WriteLine(S + "me.vertices.add(len(verts))");
-		w.WriteLine(S + "me.vertices.foreach_set(\"co\", unpack_list(verts))");
-		w.WriteLine();
-		w.WriteLine(S + "# Create materials and collect face indices");
-		w.WriteLine(S + "faces_all = []");
-		w.WriteLine(S + "for name, faces in faces_map.items():");		
-		w.WriteLine(S + S + "material = bpy.data.materials.get(name)");
-		w.WriteLine(S + S + "tex_name = name + '_diffuse'");
-		w.WriteLine(S + S + "tex_file = tex_name + '.jpg'");
-		w.WriteLine(S + S + "if material == None:");
-		w.WriteLine(S + S + S + "material = bpy.data.materials.new(name)");
-
-		w.WriteLine(S + S + S + "material.use_nodes = True");
-		//w.WriteLine(S + S + S + "ntree = material.node_tree");
-		//w.WriteLine(S + S + S + "nlinks = ntree.links");
-		
-		//w.WriteLine(S + S + S + "ndif = ntree.nodes.new('BSDF_DIFFUSE')");
-		//w.WriteLine(S + S + S + "ndif.location = 0,470");
-		//w.WriteLine(S + S + S + "nmatout = ntree.nodes.new('OUTPUT_MATERIAL')");
-		//w.WriteLine(S + S + S + "nmatout.location = 200,400");
-		//w.WriteLine(S + S + S + "nlinks.new(ndif.outputs[0], nmatout.inputs[0])");
-		
-		//w.WriteLine(S + S + S + "image = load_image(tex_file, './textures/' + model_name + '/', place_holder=True)");
-		//w.WriteLine(S + S + S + "texture = bpy.data.textures.new(tex_name, 'IMAGE')");
-		//w.WriteLine(S + S + S + "texture.image = image");
-		//w.WriteLine(S + S + S + "slot = material.texture_slots.add()");
-		//w.WriteLine(S + S + S + "slot.texture = texture");
-		//w.WriteLine(S + S + S + "slot.texture_coords = 'UV'");
-		//w.WriteLine(S + S + S + "slot.uv_layer = model_name + '_uv'");
-		//w.WriteLine(S + S + S + "slot.use_map_color_diffuse = True");
-		w.WriteLine();
-		w.WriteLine(S + S + "me.materials.append(material)");
-		w.WriteLine(S + S + "faces_all += faces");
-		w.WriteLine();
-		w.WriteLine(S + "# Load raw face indices");
-		w.WriteLine(S + "me.tessfaces.add(len(faces_all))");
-		w.WriteLine(S + "me.tessfaces.foreach_set(\"vertices_raw\", unpack_list(faces_all))");
-		w.WriteLine(S + "me.tessfaces.foreach_set(\"use_smooth\", [True] * len(me.tessfaces))");
-		w.WriteLine();
-		w.WriteLine(S + "# Load UV");
-		w.WriteLine(S + "uvtex = me.tessface_uv_textures.new(model_name + '_uv')");
-		w.WriteLine(S + "for n, tf in enumerate(uv):");
-		w.WriteLine(S + S + "texdata = uvtex.data[n]");
-		w.WriteLine(S + S + "texdata.uv1 = tf[0]");
-		w.WriteLine(S + S + "texdata.uv2 = tf[1]");
-		w.WriteLine(S + S + "texdata.uv3 = tf[2]");
-		w.WriteLine();
-		w.WriteLine(S + "# Set face materials according to the mapping");
-		w.WriteLine(S + "mat_index = 0");
-		w.WriteLine(S + "face_index = 0");
-		w.WriteLine(S + "for name, faces in faces_map.items():");
-		w.WriteLine(S + S + "for i, face in enumerate(faces):");
-		w.WriteLine(S + S + S + "me.tessfaces[i + face_index].material_index = mat_index");
-		w.WriteLine(S + S + "mat_index += 1");
-		w.WriteLine(S + S + "face_index += len(faces)");
-		w.WriteLine();
-		w.WriteLine(S + "# Update mesh with new data");
-		w.WriteLine(S + "me.update(calc_edges=True)");
-		w.WriteLine();
-		w.WriteLine(S + "return ob");
+	public void WriteGeometry() {
+		WriteMeshMeta();		
+		WriteVertices();
+		WriteNormals();
+		WriteUV();
+		WriteSubmeshes();
+		WriteMaterials();
+		WriteVertexGroups();
+	}
+	
+	public void WriteMeshMeta() {
+		w.WriteLine("model = {");
+		w.WriteLine(S + "'name': " + ValueString(meshRenderer.name) + ",");
+		w.WriteLine(S + "'pos': " + ValueVector3(meshRenderer.transform.position) + ",");
+		w.WriteLine(S + "'rot': " + ValueQuaternion(meshRenderer.transform.rotation) + ",");
+		w.WriteLine(S + "'scl': " + ValueVector3(meshRenderer.transform.lossyScale));
+		w.WriteLine("}");
 		w.WriteLine();
 	}
 	
-	public void WriteSkeletonBuilder() {
-		w.WriteLine("def buildArmature():");
-		w.WriteLine(S + "print('Building armature')");
-		w.WriteLine(S + "# Create armature and object");
-		w.WriteLine(S + "amt = bpy.data.armatures.new(model_name + '_armature')");
-		w.WriteLine(S + "amt.show_names = True");
-		w.WriteLine();
+	public void WriteVertices() {
+		w.WriteLine("# List of vertex coordinates");
+		w.Write("model['verts'] = [");
 		
-		w.WriteLine(S + "rig = bpy.data.objects.new(model_name + '_rig', amt)");
-		w.WriteLine(S + "rig.show_x_ray = True");
-		w.WriteLine(S + "rig.draw_type = 'WIRE'");
-		w.WriteLine();
-		
-		w.WriteLine(S + "# Link object to scene");
-		w.WriteLine(S + "scn = bpy.context.scene");
-		w.WriteLine(S + "scn.objects.link(rig)");
-		w.WriteLine(S + "scn.objects.active = rig");
-		w.WriteLine(S + "scn.update()");
-		w.WriteLine();
-		
-		// write bones hierarchically starting from the root bone
-		registeredBones = new HashSet<Transform>(bones);
-		visibleBones = new HashSet<Transform>();
-		looseBones = new HashSet<Transform>(registeredBones);
-
-		rootBone = FindRootBone(meshRenderer.transform.parent);
-		
-		if (rootBone != null) {
-			rootBone = rootBone.parent;
-		}
-		
-		if (rootBone == null) {
-			EditorUtility.DisplayDialog("Warning", "Root bone not found! Skipped writing of skeleton data.", "Ok");
-			w.WriteLine(S + "return rig");
-			return;
-		}
-		
-		// write bone info
-		w.WriteLine(S + "# Bone hierarchy:");
-		WriteBoneTree(rootBone, "", true);
-		w.WriteLine(S + "#");
-		
-		w.WriteLine(S + "# Registered bones: " + registeredBones.Count);
-		foreach (Transform bone in registeredBones) {
-			w.WriteLine(S + "#  " + bone.name);
-		}
-		w.WriteLine(S + "#");
-		
-		looseBones.ExceptWith(visibleBones);
-		
-		if (looseBones.Count > 0) {
-			w.WriteLine(S + "# Loose bones: " + looseBones.Count);
-			foreach (Transform bone in looseBones) {
-				if (bone.parent != null) {
-					w.WriteLine(S + "#  " + bone.name + " (parent: " + bone.parent.name + ")");
-				} else {
-					w.WriteLine(S + "#  " + bone.name);
-				}
-			}
-			w.WriteLine();
-		}
-		
-		// write bone data
-		w.WriteLine(S + "bpy.ops.object.mode_set(mode='EDIT')");
-		w.WriteLine();
-		w.WriteLine(S + "# Create bones");
-
-		WriteBone(rootBone.parent, rootBone, null);
-		
-		w.WriteLine();
-		w.WriteLine(S + "bpy.ops.object.mode_set(mode='OBJECT')");
-		w.WriteLine();
-		
-		w.WriteLine(S + "return rig");
-	}
-	
-	private void WritePoint(Transform point) {
-		Vector3 hp = point.localPosition;
-		Vector3 dir = point.localEulerAngles;
-		string vname = FixBoneName(point.name);
-		w.WriteLine(S + vname + " = bpy.data.objects.new('" + vname + "', None)");
-		w.WriteLine(S + vname + ".empty_draw_type = 'ARROWS'");
-		w.WriteLine(S + vname + ".empty_draw_size = 0.1");
-		w.WriteLine(S + vname + ".location = (" + hp.x + "," + hp.y + "," + hp.z + ")");
-		w.WriteLine(S + vname + ".rotation_euler = (" + dir.x * Mathf.Deg2Rad + "," + dir.y * Mathf.Deg2Rad + "," + dir.z * Mathf.Deg2Rad + ")");
-		
-		if (point.parent != null) {
-			w.WriteLine(S + vname + ".parent = " + FixBoneName(point.parent.name));
-		}
-		
-		w.WriteLine();
-		w.WriteLine(S + "scn = bpy.context.scene");
-		w.WriteLine(S + "scn.objects.link(" + vname + ")");
-		w.WriteLine(S + "scn.update()");
-		
-		foreach (Transform child in point) {
-			WritePoint(child);
-		}
-	}
-
-	private Transform FindRootBone(Transform parent) {
-		if (parent == null) {
-			return null;
-		}
-		
-		// find the root bone that usually isn't part of SkinnedMeshRenderer.bones
-		foreach (Transform child in parent) {
-			Transform bone = null;
-			
-			if (registeredBones.Contains(child)) {
-				bone = parent;
-			} else {
-				bone = FindRootBone(child);
-			}
-			
-			if (bone != null) {
-				return bone;
-			}
-		}
-		
-		return null;
-	}
-	
-	private void WriteBoneTree(Transform bone, String indent, bool last) {
-		visibleBones.Add(bone);
-		
-		w.Write(S + "# " + indent);
-		
-		if (last) {
-		   w.Write("\\-");
-		   indent += "  ";
-		} else {
-		   w.Write("|-");
-		   indent += "| ";
-		}
-		
-		w.WriteLine(bone.name);
-		
-		for (int i = 0; i < bone.childCount; i++) {
-			WriteBoneTree(bone.GetChild(i), indent, i == bone.childCount - 1);
-		}
-	}
-	
-	public void WriteBone(Transform head, Transform tail, Transform parent) {
-		WriteBoneRaw(head.name, parent != null ? parent.name : null, head.position, tail.position);
-		
-		if (tail.childCount == 0) {
-			Vector3 dir;
-			float dist = Math.Abs((tail.position - head.position).magnitude);
-			
-			// check the distance so the head isn't at the same location as the tail
-			// FIXME: in Wild Skies, transforms starting with "hp" seem to have
-			// incorrect rotations, use the direction of the previous bone instead
-			// as a workaround
-			if (dist > 0.1f && tail.name.StartsWith("hp", true, null)) {
-				dir = (tail.position - head.position).normalized * 0.1f;
-			} else {
-				dir = tail.rotation * new Vector3(-1, 0, 0) * 0.2f;
-			}
-			
-			WriteBoneEnd(tail, head, dir);
-		} else {
-			// write each child bone from the tail
-			foreach (Transform child in tail) {
-				WriteBone(tail, child, head);
-			}
-		}
-	}
-	
-	public void WriteBoneEnd(Transform bone, Transform parent, Vector3 dir) {
-		Vector3 hp = bone.position;
-		Vector3 tp = bone.position + dir;
-		WriteBoneRaw(bone.name, parent != null ? parent.name : null, hp, tp);
-	}
-	
-	private void WriteBoneRaw(string name, string parentName, Vector3 hp, Vector3 tp) {
-		string vname = FixBoneName(name);
-		w.WriteLine(S + vname + " = amt.edit_bones.new('" + name + "')");
-		w.WriteLine(S + vname + ".head = (" + -hp.x + "," + -hp.z + "," + hp.y + ")");
-		w.WriteLine(S + vname + ".tail = (" + -tp.x + "," + -tp.z + "," + tp.y + ")");
-		
-		if (parentName != null) {
-			string vparent = FixBoneName(parentName);
-			w.WriteLine(S + vname + ".parent = " + vparent);
-			w.WriteLine(S + vname + ".use_connect = True");
-		}
-		
-		w.WriteLine();
-	}
-	
-	private string FixBoneName(string boneName) {
-		return Regex.Replace(boneName, "[^a-zA-Z0-9_]", "_");
-	}
-	
-	public void WriteSkinBuilder() {
-		w.WriteLine("def buildSkin(ob, rig, vgroups):");
-		w.WriteLine(S + "print('Skinning mesh')");
-		
-		w.WriteLine(S + "# Create vertex groups, and add verts and weights");
-		w.WriteLine(S + "# First arg in assignment is a list, can assign several verts at once");
-		w.WriteLine(S + "for name, vgroup in vgroups.items():");
-		w.WriteLine(S + S + "grp = ob.vertex_groups.new(name)");
-		w.WriteLine(S + S + "for (v, w) in vgroup:");
-		w.WriteLine(S + S + S +  "grp.add([v], w, 'REPLACE')");
-		w.WriteLine();
-		w.WriteLine(S + "# Give mesh object an armature modifier, using vertex groups but");
-		w.WriteLine(S + "# not envelopes");
-		w.WriteLine(S + "mod = ob.modifiers.new('Armature', 'ARMATURE')");
-		w.WriteLine(S + "mod.object = rig");
-		w.WriteLine(S + "mod.use_bone_envelopes = False");
-		w.WriteLine(S + "mod.use_vertex_groups = True");
-		w.WriteLine();
-	}
-	
-	public void WriteModelBuilder() {
-		w.WriteLine("def build():");
-		w.WriteLine(S + "print('Building model ' + model_name)");
-		w.WriteLine(S + "# List of vertex coordinates");
-		w.WriteLine(S + "verts = [");
-		w.Write(S + S);
-		
+		Vector3[] verts = mesh.vertices;
 		for (int i = 0; i < verts.Length; i++) {
-			//Vector3 vert = meshRenderer.transform.TransformPoint(verts[i]);
-			Vector3 vert = verts[i];
-			
-			//This is sort of ugly - inverting x-component since we're in
-			//a different coordinate system than "everyone" is "used to".
-			w.Write("(" + -vert.x + "," + -vert.z + "," + vert.y + "),");
-			
-			WriteAutoLineBreak(i + 1);
+			w.Write(ValueVector3(verts[i]) + ", ");
+			WriteAutoLineBreak(i, 32);
 		}
 		
+		w.WriteLine("]");
 		w.WriteLine();
-		w.WriteLine(S + "]");
-		w.WriteLine();
-
-		w.WriteLine(S + "# Map of materials and faces");
-		w.WriteLine(S + "faces = collections.OrderedDict()");
+	}
+	
+	public void WriteNormals() {
+		w.WriteLine("# List of normals");
+		w.Write("model['normals'] = [");
 		
+		Vector3[] normals = mesh.normals;
+		for (int i = 0; i < normals.Length; i++) {
+			w.Write(ValueVector3(normals[i]) + ", ");
+			WriteAutoLineBreak(i, 32);
+		}
+		
+		w.WriteLine("]");
+		w.WriteLine();
+	}
+
+	public void WriteTrianglesOld() {
+		w.WriteLine("# Map of materials and face indices");
+		w.WriteLine("model['tris'] = {");
+		
+		Material[] mats = meshRenderer.sharedMaterials;
 		for (int i = 0; i < mesh.subMeshCount; i++) {
 			Material material = mats[i];
-			String matName = material == null ? "null" : material.name;
+			string matName = material == null ? "null" : material.name;
 			
-			w.WriteLine(S + "faces['" + matName + "'] = [");
-			w.Write(S + S);
+			w.Write(S + ValueString(matName) + ": [");
 			
 			int[] triangles = mesh.GetTriangles(i);
 			
 			for (int j = 0, n = 1; j < triangles.Length; j += 3, n++) {
-				w.Write("(" + triangles[j] + "," + triangles[j + 1] + "," + triangles[j + 2] + ",0),");
-
-				WriteAutoLineBreak(n);
+				w.Write(ValueVector3(triangles[j], triangles[j + 1],  triangles[j + 2]) + ", ");
+				WriteAutoLineBreak(j, 32);
 			}
 			
-			w.WriteLine();
-			w.WriteLine(S + "]");
-			w.WriteLine();
+			w.WriteLine("],");
 		}
 		
+		w.WriteLine("}");
 		w.WriteLine();
-		
-		w.WriteLine(S + "# List of texture face UVs");
-		w.WriteLine(S + "uv = [");
-		w.Write(S + S);
-		
+	}
+
+	public void WriteSubmeshes() {
+		w.WriteLine("# List of triangle indices per submesh");
+		w.WriteLine("model['submeshes'] = [");
+
+		for (int i = 0; i < mesh.subMeshCount; i++) {
+			w.Write(S + "[");
+
+			int[] triangles = mesh.GetTriangles(i);
+
+			for (int j = 0; j < triangles.Length; j++) {
+				w.Write(triangles[j] + ", ");
+				WriteAutoLineBreak(j, 128);
+			}
+
+			w.WriteLine("],");
+		}
+
+		w.WriteLine("]");
+		w.WriteLine();
+	}
+
+	public void WriteMaterials() {
+		w.WriteLine("# List of material names per submesh");
+		w.Write("model['materials'] = [");
+
+		Material[] mats = meshRenderer.sharedMaterials;
+		for (int i = 0; i < mesh.subMeshCount; i++) {
+			Material material = mats[i];
+			string matName = material == null ? "null" : material.name;
+			w.Write(ValueString(matName) + ", ");
+		}
+
+		w.WriteLine("]");
+		w.WriteLine();
+	}
+	
+	public void WriteUV() {
+		w.WriteLine("# List of texture face UVs");
+		w.Write("model['uv'] = [");
+
+		int[] tris = mesh.triangles;
+		Vector2[] uv = mesh.uv;
 		for (int i = 0, n = 1; i < tris.Length; i += 3, n++) {
 			w.Write("[");
-			w.Write("(" + uvs[tris[i]].x + "," + uvs[tris[i]].y + "),");
-			w.Write("(" + uvs[tris[i + 1]].x + "," + uvs[tris[i + 1]].y + "),");
-			w.Write("(" + uvs[tris[i + 2]].x + "," + uvs[tris[i + 2]].y + ")");
-			w.Write("],");
+
+			w.Write(ValueVector2(uv[tris[i]]) + ", ");
+			w.Write(ValueVector2(uv[tris[i + 1]]) + ", ");
+			w.Write(ValueVector2(uv[tris[i + 2]]));
 			
-			WriteAutoLineBreak(n);
+			w.Write("], ");
+			WriteAutoLineBreak(i, 16);
 		}
 		
+		w.WriteLine("]");
 		w.WriteLine();
-		w.WriteLine(S + "]");
-		w.WriteLine();
+	}
+	
+	public void WriteVertexGroups() {
+		w.WriteLine("# List of vertex groups, formatted as: (vertex index, weight)");
+		w.WriteLine("model['vg'] = {");
 		
-		w.WriteLine(S + "# List of vertex groups, in the form (vertex, weight)");
-		w.WriteLine(S + "vg = collections.OrderedDict()");
-		
+		Transform[] bones = meshRenderer.bones;
+		BoneWeight[] boneWeights = mesh.boneWeights;
 		for (int i = 0; i < bones.Length; i++) {
 			List<Dictionary<int, float>> vweightList = new List<Dictionary<int, float>>();
 			
@@ -506,49 +272,156 @@ public class Mesh2BPY {
 			}
 			
 			if (vweightList.Count > 0) {
-				w.Write(S + "vg['" + bones[i].name + "'] = [");
+				w.Write(S + ValueString(bones[i].name) + ": [");
 				
+				int vgcount = 1;
 				foreach (Dictionary<int, float> vweight in vweightList) {
-					foreach(KeyValuePair<int, float> entry in vweight) {
-						w.Write("(" + entry.Key + "," + entry.Value + "),");
+					foreach (KeyValuePair<int, float> entry in vweight) {
+						w.Write(ValueVector2(entry.Key, entry.Value) + ", ");
+						vgcount++;
+						WriteAutoLineBreak(vgcount, 32);
 					}
 				}
 				
-				w.WriteLine("]");
+				w.WriteLine("],");
 			} else {
-				w.WriteLine(S + "# No weights for bone " + bones[i].name);
+				w.WriteLine("# No weights for bone " + bones[i].name);
 			}
 		}
 		
+		w.WriteLine("}");
 		w.WriteLine();
-		
-		w.WriteLine(S + "origin = bpy.data.objects.new(model_name, None)");
-		w.WriteLine(S + "mesh = buildMesh(verts, faces, uv)");
-		w.WriteLine(S + "rig = buildArmature()");
-		w.WriteLine(S + "buildSkin(mesh, rig, vg)");
-		w.WriteLine();
-		w.WriteLine(S + "# Connect objects");
-		w.WriteLine(S + "mesh.parent = origin");
-		w.WriteLine(S + "rig.parent = origin");
-		w.WriteLine();
-		w.WriteLine(S + "scn = bpy.context.scene");
-		w.WriteLine(S + "scn.objects.link(origin)");
-		w.WriteLine(S + "scn.objects.active = origin");
-		w.WriteLine(S + "scn.update()");
-		w.WriteLine();
+	}
+	
+	public void WriteTransforms() {
+		HashSet<Transform> bones = new HashSet<Transform>(meshRenderer.bones);
 
-		w.WriteLine();
-	}
-	
-	public void WriteFooter() {
-		w.WriteLine("if __name__ == \"__main__\":");
-		w.WriteLine(S + "build()");
-	}
-	
-	private void WriteAutoLineBreak(int n) {
-		if (n % LineBreakLimit == 0) {
+		// save all connected bones in the set
+		CollectTransforms(meshRenderer.transform.parent, bones);
+
+		try {
+			// reset local scale on all bones and save the original values in the dictionary,
+			// this is required to unscale Transform.position
+			boneScales.Clear();
+			foreach (Transform bone in bones) {
+				boneScales.Add(bone, bone.localScale);
+				bone.localScale = new Vector3(1, 1, 1);
+			}
+
+			w.WriteLine("model['bones'] = {");
+			
+			foreach (Transform bone in bones) {
+				WriteTransform(bone);
+			}
+			
+			w.WriteLine("}");
+			w.WriteLine("model['root_bone'] = " + ValueString (meshRenderer.rootBone.name));
 			w.WriteLine();
-			w.Write(S + S);
+		} finally {
+			// restore local scale
+			foreach (Transform bone in bones) {
+				bone.localScale = boneScales[bone];
+			}
+		}
+	}
+	
+	private void WriteTransform(Transform t) {
+		w.WriteLine(S + ValueString(t.name) + ": {");
+
+		w.WriteLine(S + S + "'pos': " + ValueVector3(t.position) + ",");
+		w.WriteLine(S + S + "'rot': " + ValueQuaternion(t.rotation) + ",");
+
+		w.WriteLine(S + S + "'lpos': " + ValueVector3(t.localPosition) + ",");
+		w.WriteLine(S + S + "'lrot': " + ValueQuaternion(t.localRotation) + ",");
+		//w.WriteLine(S + S + "'lscl': " + ValueVector3(t.localScale) + ",");
+		w.WriteLine(S + S + "'lscl': " + ValueVector3(boneScales[t]) + ",");
+		
+		if (t.parent != null) {
+			w.WriteLine(S + S + "'parent': " + ValueString(t.parent.name) + ",");
+		}
+		
+		if (t.childCount > 0) {
+			w.Write(S + S + "'children': [");
+			
+			Transform lastChild = t.GetChild(t.childCount - 1);
+			foreach (Transform child in t) {
+				w.Write(ValueString(child.name));
+				if (child != lastChild) {
+					w.Write(", ");
+				}
+			}
+			
+			w.WriteLine("]");
+		}
+		
+		w.WriteLine(S + "},");
+	}
+	
+	private void CollectTransforms(Transform transform, HashSet<Transform> tset) {
+		tset.Add(transform);
+		foreach (Transform child in transform) {
+			CollectTransforms(child, tset);
+		}
+	}
+	
+	private void WriteAnimations(Animation anim) {
+		if (anim == null) {
+			return;
+		}
+		
+		w.WriteLine("# Map of animation keyframes for every bone");
+		w.WriteLine("model['animations'] = {");
+		
+		AnimationClip[] clips = AnimationUtility.GetAnimationClips(anim);
+		
+		foreach (AnimationClip clip in clips) {
+			// map curves to bones first
+			AnimationClipCurveData[] curves = AnimationUtility.GetAllCurves(clip);
+			Dictionary<string, HashSet<AnimationClipCurveData>> boneCurveMap = new Dictionary<string, HashSet<AnimationClipCurveData>>();
+			
+			foreach (AnimationClipCurveData curve in curves) {
+				string boneName = Regex.Replace(curve.path, "^([^/]+/)+", "");
+				
+				HashSet<AnimationClipCurveData> curveSet;
+				
+				if (boneCurveMap.ContainsKey(boneName)) {
+					curveSet = boneCurveMap[boneName];
+				} else {
+					curveSet = new HashSet<AnimationClipCurveData>();
+					boneCurveMap.Add(boneName, curveSet);
+				}
+				
+				curveSet.Add(curve);
+			}
+			
+			// now write data for each bone, curve and keyframe
+			w.WriteLine(S + ValueString(clip.name) + ": {");
+
+			foreach (KeyValuePair<string, HashSet<AnimationClipCurveData>> entry in boneCurveMap) {
+				w.WriteLine(S + S + ValueString(entry.Key) + ": {");
+				
+				foreach (AnimationClipCurveData curve in entry.Value) {
+					w.Write(S + S + S + ValueString(curve.propertyName) + ": {");
+					
+					foreach (Keyframe kf in curve.curve.keys) {
+						w.Write(ValueVector2(kf.time, kf.value) + ",");
+					}
+					
+					w.WriteLine("},");
+				}
+				
+				w.WriteLine(S + S + "},");
+			}
+			
+			w.WriteLine(S + "},");
+		}
+		
+		w.WriteLine("}");
+	}
+	
+	private void WriteAutoLineBreak(int n, int limit) {
+		if ((n + 1) % limit == 0) {
+			w.WriteLine();
 		}
 	}
 }
