@@ -77,8 +77,8 @@ class ImportPythonModel(Operator, ImportHelper):
         
         # create armature object
         ob_amt = bpy.data.objects.new(self.model['name'] + " Armature", amt)
-        ob_amt.show_x_ray = True
-        ob_amt.draw_type = 'WIRE'
+        ob_amt.show_in_front = True
+        ob_amt.display_type = 'WIRE'
         ob_amt.parent = ob
         
         # Give mesh object an armature modifier, using vertex groups but
@@ -89,18 +89,21 @@ class ImportPythonModel(Operator, ImportHelper):
         mod.use_vertex_groups = True
         
         # link objects to scene
-        bpy.context.scene.objects.link(ob)
-        bpy.context.scene.objects.link(ob_mesh)
-        bpy.context.scene.objects.link(ob_amt)
+        bpy.context.collection.objects.link(ob)
+        bpy.context.collection.objects.link(ob_mesh)
+        bpy.context.collection.objects.link(ob_amt)
         
         # build armature
-        bpy.context.scene.objects.active = ob_amt
+        bpy.context.view_layer.objects.active = ob_amt
         self.build_armature(ob_mesh, ob_amt)
         
     def build_geometry(self):
         # create mesh data and BMesh
+    
         me = bpy.data.meshes.new(self.model['name'])
         bm = bmesh.new()
+        
+        
     
         # create vertices
         for vert in self.model['verts']:
@@ -136,6 +139,9 @@ class ImportPythonModel(Operator, ImportHelper):
         # create uv layers
         uv_lay = bm.loops.layers.uv.verify()
         face_index_ofs = 0
+        if hasattr(bm.verts, "ensure_lookup_table"): 
+            bm.verts.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
         for face_index, face_uv in enumerate(self.model['uv']):
             # skip duplicate faces and correct face index
             if face_index in dupfaces:
@@ -157,7 +163,7 @@ class ImportPythonModel(Operator, ImportHelper):
         # create vertex groups, and add verts and weights
         # first arg in assignment is a list, can assign several verts at once
         for name, vgroup in self.model['vg'].items():
-            grp = ob_mesh.vertex_groups.new(name)
+            grp = ob_mesh.vertex_groups.new(name=name)
             for (v, w) in vgroup:
                 grp.add([v], w, 'REPLACE')
         
@@ -188,8 +194,8 @@ class ImportPythonModel(Operator, ImportHelper):
             bone_shape.name = "bone_shape"
             bone_shape.use_fake_user = True
             #bone_shape.empty_draw_size = 0.2
-            bpy.context.scene.objects.unlink(bone_shape) # don't want the user deleting this
-            bpy.context.scene.objects.active = ob_amt
+            bpy.context.collection.objects.unlink(bone_shape) # don't want the user deleting this
+            bpy.context.view_layer.objects.active = ob_amt
             
         bpy.ops.object.mode_set(mode='POSE')
             
@@ -220,11 +226,11 @@ def menu_func_import(self, context):
 
 def register():
     bpy.utils.register_class(ImportPythonModel)
-    bpy.types.INFO_MT_file_import.append(menu_func_import)
+    bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
 def unregister():
     bpy.utils.unregister_class(ImportPythonModel)
-    bpy.types.INFO_MT_file_import.remove(menu_func_import)
+    bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
 
 if __name__ == "__main__":
     register()
